@@ -1,0 +1,159 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.creditUserByAdmin = exports.getAllTransactions = exports.approveAgent = exports.updateUserStatus = exports.getAllUsers = exports.getDashboardOverview = void 0;
+const mongoose_1 = __importDefault(require("mongoose"));
+const Transaction_1 = __importDefault(require("../models/Transaction"));
+const User_1 = __importDefault(require("../models/User"));
+const getDashboardOverview = async (req, res) => {
+    try {
+        const totalUsers = await User_1.default.countDocuments({ role: 'user' });
+        const totalAgents = await User_1.default.countDocuments({ role: 'agent' });
+        const totalTransactions = await Transaction_1.default.countDocuments();
+        const walletVolume = await Transaction_1.default.aggregate([
+            {
+                $group: {
+                    _id: null,
+                    total: { $sum: '$amount' }
+                }
+            }
+        ]);
+        res.json({
+            totalUsers,
+            totalAgents,
+            totalTransactions,
+            totalVolume: walletVolume[0]?.total || 0
+        });
+    }
+    catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+};
+exports.getDashboardOverview = getDashboardOverview;
+const getAllUsers = async (req, res) => {
+    try {
+        const { search, role, page = 1, limit = 10 } = req.query;
+        const query = {};
+        if (role)
+            query.role = role;
+        if (search) {
+            query.$or = [
+                { name: { $regex: search, $options: 'i' } },
+                { email: { $regex: search, $options: 'i' } },
+                { phone: { $regex: search, $options: 'i' } }
+            ];
+        }
+        const users = await User_1.default.find(query)
+            .select('-password')
+            .sort({ createdAt: -1 })
+            .skip((Number(page) - 1) * Number(limit))
+            .limit(Number(limit));
+        const total = await User_1.default.countDocuments(query);
+        res.json({ users, page: Number(page), pages: Math.ceil(total / Number(limit)), total });
+    }
+    catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+};
+exports.getAllUsers = getAllUsers;
+const updateUserStatus = async (req, res) => {
+    try {
+        const { isActive } = req.body;
+        const user = await User_1.default.findById(req.params.id);
+        if (!user)
+            return res.status(404).json({ message: 'User not found' });
+        user.isActive = isActive;
+        await user.save();
+        res.json({ message: `User ${isActive ? 'unblocked' : 'blocked'} successfully` });
+    }
+    catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+};
+exports.updateUserStatus = updateUserStatus;
+const approveAgent = async (req, res) => {
+    try {
+        const agent = await User_1.default.findById(req.params.id);
+        if (!agent || agent.role !== 'agent')
+            return res.status(404).json({ message: 'Agent not found' });
+        agent.isApproved = true;
+        await agent.save();
+        res.json({ message: 'Agent approved successfully' });
+    }
+    catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+};
+exports.approveAgent = approveAgent;
+const getAllTransactions = async (req, res) => {
+    try {
+        const { type, status, startDate, endDate, page = 1, limit = 10 } = req.query;
+        const query = {};
+        if (type)
+            query.type = type;
+        if (status)
+            query.status = status;
+        if (startDate && endDate) {
+            query.createdAt = { $gte: new Date(startDate), $lte: new Date(endDate) };
+        }
+        const transactions = await Transaction_1.default.find(query)
+            .sort({ createdAt: -1 })
+            .skip((Number(page) - 1) * Number(limit))
+            .limit(Number(limit))
+            .populate('sender', 'name phone')
+            .populate('receiver', 'name phone')
+            .populate('handledBy', 'name phone');
+        const total = await Transaction_1.default.countDocuments(query);
+        res.json({ transactions, page: Number(page), pages: Math.ceil(total / Number(limit)), total });
+    }
+    catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+};
+exports.getAllTransactions = getAllTransactions;
+const creditUserByAdmin = async (req, res) => {
+    const session = await mongoose_1.default.startSession();
+    session.startTransaction();
+    try {
+        const { amount } = req.body;
+        const userId = req.params.id;
+        if (!amount || Number(amount) <= 0) {
+            throw new Error('Amount must be greater than 0');
+        }
+        // @ts-ignore
+        const adminId = req.user?._id;
+        const user = await User_1.default.findById(userId).session(session);
+        const admin = await User_1.default.findById(adminId).session(session);
+        if (!user)
+            return res.status(404).json({ message: 'User not found' });
+        if (!admin)
+            return res.status(404).json({ message: 'Admin not found' });
+        // credit the user's balance
+        user.balance = (user.balance || 0) + Number(amount);
+        await user.save();
+        // create a deposit transaction (admin -> user)
+        const tx = await Transaction_1.default.create([
+            {
+                sender: admin._id,
+                receiver: user._id,
+                amount: Number(amount),
+                type: 'deposit',
+                status: 'success',
+                handledBy: admin._id,
+                note: `Admin credited ${Number(amount)} to user ${user._id}`,
+            },
+        ], { session });
+        await session.commitTransaction();
+        res.json({ message: 'User credited successfully', transaction: tx[0] });
+    }
+    catch (error) {
+        await session.abortTransaction();
+        res.status(400).json({ message: error.message });
+    }
+    finally {
+        session.endSession();
+    }
+};
+exports.creditUserByAdmin = creditUserByAdmin;

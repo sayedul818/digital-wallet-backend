@@ -20,28 +20,37 @@ connectDB()
   .then(() => console.log('✅ MongoDB connected successfully'))
   .catch((err) => {
     console.error('❌ MongoDB connection error:', err);
-    process.exit(1);
+    // On Vercel we don't want the function to exit the entire runtime process
+    if (process.env.VERCEL) {
+      console.error('Running on Vercel - continuing without exiting');
+    } else {
+      process.exit(1);
+    }
   });
 
+// Configure CORS with a safe origin checker. Use CORS_ORIGIN env var (comma-separated)
 const allowedOrigins = process.env.CORS_ORIGIN
-  ? process.env.CORS_ORIGIN.split(',')
-  : ['http://localhost:8080', 'http://localhost:8081', 'http://localhost:5173'];
+  ? process.env.CORS_ORIGIN.split(',').map((s) => s.trim())
+  : [
+      'http://localhost:8080',
+      'http://localhost:8081',
+      'http://localhost:5173',
+      'https://digital-wallet-frontend-indol.vercel.app',
+    ];
 
 app.use(
   cors({
     origin: function (origin, callback) {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        console.warn('🚫 Blocked by CORS:', origin);
-        callback(new Error('Not allowed by CORS'));
-      }
+      // allow requests with no origin like mobile apps or curl
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      console.warn('🚫 Blocked by CORS origin:', origin);
+      return callback(new Error('Not allowed by CORS'));
     },
     credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
   })
 );
+
 
 app.use(morgan('dev'));
 app.use(express.json({ limit: '10mb' }));
@@ -74,5 +83,10 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   });
 });
 
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+// When running on Vercel (serverless) we should export the app instead of listening.
+if (!process.env.VERCEL) {
+  const PORT = process.env.PORT || 5000;
+  app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+}
+
+export default app;
