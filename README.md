@@ -67,10 +67,6 @@ digital-wallet-backend/
    JWT_SECRET=your_jwt_secret
    PORT=5000
    ```
-
-   Note: The default admin credentials are:
-   - Email: admin@digitalwallet.com
-   - Password: admin123
    
    You can change these credentials in the `.env` file before running the application.
 
